@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My Expenses</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>My Expenses</h1>
+    <button id="logout-btn" class="btn-secondary" type="button">Logout</button>
+  </header>
+
+  <form id="expense-form">
+    <h2 id="form-title">Add expense</h2>
+    <div class="form-grid">
+      <div>
+        <label for="title">Title</label>
+        <input type="text" id="title" placeholder="e.g. Lunch" required>
+      </div>
+      <div>
+        <label for="amount">Amount</label>
+        <input type="number" id="amount" placeholder="e.g. 250" step="0.01" min="0.01" required>
+      </div>
+      <div>
+        <label for="category">Category</label>
+        <select id="category">
+          <option>Food</option>
+          <option>Travel</option>
+          <option>Bills</option>
+          <option>Shopping</option>
+          <option>Health</option>
+          <option>Education</option>
+          <option>Other</option>
+        </select>
+      </div>
+      <div>
+        <label for="expense_date">Date</label>
+        <input type="date" id="expense_date" required>
+      </div>
+      <div class="full">
+        <label for="note">Note (optional)</label>
+        <input type="text" id="note" placeholder="Anything to remember">
+      </div>
+    </div>
+    <div class="form-actions">
+      <button type="submit" id="submit-btn">Add expense</button>
+      <button type="button" id="cancel-btn" class="btn-secondary hidden">Cancel</button>
+    </div>
+  </form>
+
+  <div id="notice" class="notice hidden"></div>
+
+  <div class="summary">
+    <span id="count">0 expenses</span>
+    <strong id="total">Total: ₹0.00</strong>
+  </div>
+
+  <ul id="expense-list"></ul>
+
+  <script>
+    const API = "http://127.0.0.1:5000";
+    const token = localStorage.getItem("token");
+
+    if (!token) {
+      window.location.href = "login.html";
+    }
+
+    const form = document.getElementById("expense-form");
+    const formTitle = document.getElementById("form-title");
+    const submitBtn = document.getElementById("submit-btn");
+    const cancelBtn = document.getElementById("cancel-btn");
+    const notice = document.getElementById("notice");
+    const list = document.getElementById("expense-list");
+
+    let editingId = null;
+    let noticeTimer = null;
+
+    function todayString() {
+      return new Date().toLocaleDateString("en-CA"); // gives YYYY-MM-DD
+    }
+
+    function showNotice(text, type) {
+      notice.textContent = text;
+      notice.className = "notice " + type;
+      clearTimeout(noticeTimer);
+      if (type === "success") {
+        noticeTimer = setTimeout(() => notice.classList.add("hidden"), 3000);
+      }
+    }
+
+    function formatMoney(value) {
+      return Number(value).toLocaleString("en-IN", { style: "currency", currency: "INR" });
+    }
+
+    function formatDate(value) {
+      return new Date(value + "T00:00:00").toLocaleDateString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric"
+      });
+    }
+
+    async function apiRequest(path, options = {}) {
+      try {
+        const response = await fetch(API + path, {
+          ...options,
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + token
+          }
+        });
+
+        if (response.status === 401) {
+          localStorage.removeItem("token");
+          window.location.href = "login.html";
+          return null;
+        }
+
+        let data = {};
+        try { data = await response.json(); } catch (e) {}
+        return { ok: response.ok, data: data };
+      } catch (error) {
+        showNotice("Cannot reach the server. Is Flask running?", "error");
+        return null;
+      }
+    }
+
+    async function loadExpenses() {
+      const result = await apiRequest("/expenses?page=1&limit=100");
+      if (!result) return;
+
+      if (!result.ok) {
+        showNotice(result.data.error || "Could not load expenses.", "error");
+        return;
+      }
+
+      const expenses = result.data.expenses;
+      list.innerHTML = "";
+
+      let total = 0;
+      expenses.forEach((exp) => {
+        total += Number(exp.amount);
+        list.appendChild(buildItem(exp));
+      });
+
+      if (expenses.length === 0) {
+        const empty = document.createElement("li");
+        empty.className = "empty";
+        empty.textContent = "No expenses yet. Add your first one above!";
+        list.appendChild(empty);
+      }
+
+      document.getElementById("count").textContent =
+        expenses.length + (expenses.length === 1 ? " expense" : " expenses");
+      document.getElementById("total").textContent = "Total: " + formatMoney(total);
+    }
+
+    function buildItem(exp) {
+      const li = document.createElement("li");
+      li.className = "expense-item";
+
+      const info = document.createElement("div");
+      info.className = "expense-info";
+
+      const title = document.createElement("div");
+      title.className = "expense-title";
+      title.textContent = exp.title;
+
+      const meta = document.createElement("div");
+      meta.className = "expense-meta";
+
+      const badge = document.createElement("span");
+      badge.className = "badge cat-" + exp.category.toLowerCase();
+      badge.textContent = exp.category;
+
+      const date = document.createElement("span");
+      date.textContent = formatDate(exp.expense_date);
+
+      meta.appendChild(badge);
+      meta.appendChild(date);
+      info.appendChild(title);
+      info.appendChild(meta);
+
+      if (exp.note) {
+        const note = document.createElement("div");
+        note.className = "expense-note";
+        note.textContent = exp.note;
+        info.appendChild(note);
+      }
+
+      const right = document.createElement("div");
+      right.className = "expense-right";
+
+      const amount = document.createElement("div");
+      amount.className = "expense-amount";
+      amount.textContent = formatMoney(exp.amount);
+
+      const actions = document.createElement("div");
+      actions.className = "expense-actions";
+
+      const editBtn = document.createElement("button");
+      editBtn.type = "button";
+      editBtn.className = "btn-small btn-secondary";
+      editBtn.textContent = "Edit";
+      editBtn.addEventListener("click", () => startEdit(exp));
+
+      const deleteBtn = document.createElement("button");
+      deleteBtn.type = "button";
+      deleteBtn.className = "btn-small btn-danger";
+      deleteBtn.textContent = "Delete";
+      deleteBtn.addEventListener("click", () => deleteExpense(exp));
+
+      actions.appendChild(editBtn);
+      actions.appendChild(deleteBtn);
+      right.appendChild(amount);
+      right.appendChild(actions);
+
+      li.appendChild(info);
+      li.appendChild(right);
+      return li;
+    }
+
+    function resetForm() {
+      editingId = null;
+      form.reset();
+      document.getElementById("expense_date").value = todayString();
+      formTitle.textContent = "Add expense";
+      submitBtn.textContent = "Add expense";
+      cancelBtn.classList.add("hidden");
+    }
+
+    function startEdit(exp) {
+      editingId = exp.id;
+      document.getElementById("title").value = exp.title;
+      document.getElementById("amount").value = exp.amount;
+      document.getElementById("category").value = exp.category;
+      document.getElementById("expense_date").value = exp.expense_date;
+      document.getElementById("note").value = exp.note || "";
+      formTitle.textContent = "Edit expense";
+      submitBtn.textContent = "Save changes";
+      cancelBtn.classList.remove("hidden");
+      notice.classList.add("hidden");
+      window.scrollTo({ top: 0, behavior: "smooth" });
+    }
+
+    async function deleteExpense(exp) {
+      if (!confirm('Delete "' + exp.title + '"? This cannot be undone.')) return;
+
+      const result = await apiRequest("/expenses/" + exp.id, { method: "DELETE" });
+      if (!result) return;
+
+      if (result.ok) {
+        if (editingId === exp.id) resetForm();
+        showNotice("Expense deleted.", "success");
+        loadExpenses();
+      } else {
+        showNotice(result.data.error || "Could not delete the expense.", "error");
+      }
+    }
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+
+      const amount = parseFloat(document.getElementById("amount").value);
+      if (isNaN(amount) || amount <= 0) {
+        showNotice("Amount must be a number greater than 0.", "error");
+        return;
+      }
+
+      const payload = {
+        title: document.getElementById("title").value.trim(),
+        amount: amount,
+        category: document.getElementById("category").value,
+        expense_date: document.getElementById("expense_date").value,
+        note: document.getElementById("note").value.trim()
+      };
+
+      const isEditing = editingId !== null;
+      const path = isEditing ? "/expenses/" + editingId : "/expenses";
+      const method = isEditing ? "PUT" : "POST";
+
+      const result = await apiRequest(path, { method: method, body: JSON.stringify(payload) });
+      if (!result) return;
+
+      if (result.ok) {
+        showNotice(isEditing ? "Expense updated!" : "Expense added!", "success");
+        resetForm();
+        loadExpenses();
+      } else {
+        showNotice(result.data.error || "Something went wrong.", "error");
+      }
+    });
+
+    cancelBtn.addEventListener("click", resetForm);
+
+    document.getElementById("logout-btn").addEventListener("click", () => {
+      localStorage.removeItem("token");
+      window.location.href = "login.html";
+    });
+
+    document.getElementById("expense_date").max = todayString();
+    resetForm();
+    loadExpenses();
+  </script>
+</body>
+</html>
